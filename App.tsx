@@ -1,114 +1,131 @@
-import React, { useState } from "react";
+// App.tsx
+import React, { useEffect, useState } from 'react';
 import {
-  SafeAreaView,
-  StyleSheet,
-  Text,
-  TouchableOpacity,
   View,
-} from "react-native";
+  Text,
+  Button,
+  FlatList,
+  TouchableOpacity,
+  TextInput,
+  StyleSheet,
+} from 'react-native';
+import { Device, BleManager } from 'react-native-ble-plx';
+import base64 from 'react-native-base64';
+import { bleService } from './services/BluetoothService';
 
-import useBLE from "./useBLE";
-import { useEffect } from "react";
-const App = () => {
-  const {
-    requestPermissions,
-    scanForPeripherals,
-    allDevices,
-    connectToDevice,
-    connectedDevice,
-    heartRate,
-    disconnectFromDevice,
-  } = useBLE();
-  const [isModalVisible, setIsModalVisible] = useState<boolean>(false);
+const SERVICE_UUID = '6e400001-b5a3-f393-e0a9-e50e24dcca9e';
+const WRITE_CHAR_UUID = '6e400002-b5a3-f393-e0a9-e50e24dcca9e';
+const READ_CHAR_UUID = '6e400003-b5a3-f393-e0a9-e50e24dcca9e';
 
-  const scanForDevices = async () => {
-    const isPermissionsEnabled = await requestPermissions();
-    if (isPermissionsEnabled) {
-      scanForPeripherals();
+export default function App() {
+  const [devices, setDevices] = useState<Device[]>([]);
+  const [connectedDevice, setConnectedDevice] = useState<Device | null>(null);
+  const [inputText, setInputText] = useState('');
+  const [receivedText, setReceivedText] = useState('');
+
+  useEffect(() => {
+    bleService.requestPermissions();
+    return () => bleService.disconnect();
+  }, []);
+
+  const startScan = () => {
+    setDevices([]);
+    bleService.scanDevices((device) => {
+      setDevices((prev) => {
+        if (!prev.find((d) => d.id === device.id)) return [...prev, device];
+        return prev;
+      });
+    });
+
+    setTimeout(() => bleService.stopScan(), 10000);
+  };
+
+  const connect = async (deviceId: string) => {
+    const device = await bleService.connectToDevice(deviceId);
+    if (device) {
+      setConnectedDevice(device);
+      alert(`Connected to ${device.name}`);
+
+      // Set up notifications
+      device.monitorCharacteristicForService(
+        SERVICE_UUID,
+        READ_CHAR_UUID,
+        (error, characteristic) => {
+          if (error) {
+            console.error('Notification error:', error);
+            return;
+          }
+          const decoded = base64.decode(characteristic?.value || '');
+          setReceivedText((prev) => prev + '\n' + decoded);
+        }
+      );
     }
   };
 
-  const hideModal = () => {
-    setIsModalVisible(false);
+  const writeData = async () => {
+    if (connectedDevice && inputText) {
+      const encoded = base64.encode(inputText);
+      await bleService.writeCharacteristic(
+        SERVICE_UUID,
+        WRITE_CHAR_UUID,
+        encoded
+      );
+      setInputText('');
+    }
   };
-
-  const openModal = async () => {
-    scanForDevices();
-    setIsModalVisible(true);
-  };
-
-  useEffect(() => {
-    allDevices.forEach((device, index) => { 
-      if (device?.name) {
-            console.log(`Device ${index + 1}: ${device.name}`);
-      }
-    });
-
-
-  })
 
   return (
-    <SafeAreaView style={styles.container}>
-      <View style={styles.heartRateTitleWrapper}>
-        {connectedDevice ? (
-          <>
-            <Text style={styles.heartRateTitleText}>Your Heart Rate Is:</Text>
-            <Text style={styles.heartRateText}>{heartRate} bpm</Text>
-          </>
-        ) : (
-          <Text style={styles.heartRateTitleText}>
-            Please Connect to a Heart Rate Monitor
-          </Text>
+    <View style={{ padding: 20, marginTop: 40 }}>
+      <Button title="Scan BLE Devices" onPress={startScan} />
+      <FlatList
+        data={devices}
+        keyExtractor={(item) => item.id}
+        renderItem={({ item }) => (
+          <TouchableOpacity
+            style={styles.deviceItem}
+            onPress={() => connect(item.id)}
+          >
+            <Text>{item.name || 'Unnamed Device'}</Text>
+            <Text style={styles.deviceId}>{item.id}</Text>
+          </TouchableOpacity>
         )}
-      </View>
-      <TouchableOpacity
-        onPress={connectedDevice ? disconnectFromDevice : openModal}
-        style={styles.ctaButton}
-      >
-        <Text style={styles.ctaButtonText}>
-          {connectedDevice ? "Disconnect" : "Connect"}
-        </Text>
-      </TouchableOpacity>
+      />
+      {connectedDevice && (
+        <>
+          <Text style={{ marginVertical: 10 }}>
+            Connected to: {connectedDevice.name}
+          </Text>
 
-    </SafeAreaView>
+          <TextInput
+            placeholder="Type to send..."
+            value={inputText}
+            onChangeText={setInputText}
+            style={styles.input}
+          />
+          <Button title="Send to ESP32" onPress={writeData} />
+
+          <Text style={{ marginTop: 20, fontWeight: 'bold' }}>Received:</Text>
+          <Text>{receivedText || '(No data yet)'}</Text>
+        </>
+      )}
+    </View>
   );
-};
+}
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: "#f2f2f2",
+  deviceItem: {
+    padding: 10,
+    borderBottomWidth: 1,
+    borderColor: '#ccc',
   },
-  heartRateTitleWrapper: {
-    flex: 1,
-    justifyContent: "center",
-    alignItems: "center",
+  deviceId: {
+    fontSize: 12,
+    color: 'gray',
   },
-  heartRateTitleText: {
-    fontSize: 30,
-    fontWeight: "bold",
-    textAlign: "center",
-    marginHorizontal: 20,
-    color: "black",
-  },
-  heartRateText: {
-    fontSize: 25,
-    marginTop: 15,
-  },
-  ctaButton: {
-    backgroundColor: "#FF6060",
-    justifyContent: "center",
-    alignItems: "center",
-    height: 50,
-    marginHorizontal: 20,
-    marginBottom: 5,
-    borderRadius: 8,
-  },
-  ctaButtonText: {
-    fontSize: 18,
-    fontWeight: "bold",
-    color: "white",
+  input: {
+    borderWidth: 1,
+    borderColor: '#ccc',
+    padding: 8,
+    marginVertical: 10,
   },
 });
-
-export default App;
